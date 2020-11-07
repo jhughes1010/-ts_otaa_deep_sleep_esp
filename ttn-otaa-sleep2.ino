@@ -30,15 +30,24 @@
    arduino-lmic/project_config/lmic_project_config.h or from your BOARDS.txt.
 
  *******************************************************************************/
-
+#include <arduino.h>
 #include <lmic.h>
 #include <hal/hal.h>
 #include <SPI.h>
+#include <U8g2lib.h>
+#include <Wire.h>
+#include <Adafruit_AHTX0.h>
 #include "ttn_credentials.h"
 
 // Schedule TX every this many seconds (might become longer due to duty
 // cycle limitations).
 const unsigned TX_INTERVAL = 180;
+
+//temp and humidity sensor
+Adafruit_AHTX0 aht;
+
+float tempC, tempF;
+int tempCSend;
 
 
 //
@@ -78,7 +87,7 @@ void os_getDevKey (u1_t* buf) {
   memcpy_P(buf, APPKEY, 16);
 }
 
-static uint8_t mydata[] = "Hi!";
+uint8_t mydata[3];
 static osjob_t sendjob;
 
 // Heltec esp32 LoRa v2 pin mapping
@@ -228,9 +237,28 @@ void do_send(osjob_t* j) {
   // Check if there is not a current TX/RX job running
   if (LMIC.opmode & OP_TXRXPEND) {
     Serial.println(F("OP_TXRXPEND, not sending"));
-  } else {
+  }
+  else
+  {
+    // read temp and humidity
+
+    sensors_event_t humidity, temperature;
+    aht.getEvent(&humidity, &temperature);// populate temp and humidity objects with fresh data
+    tempC = temperature.temperature;
+    tempF = tempC * 9 / 5 + 32;
+    tempCSend = (int)(tempC * 10);
+
+    Serial.printf("\nTemperature: %4.1f C\n", tempC);
+    Serial.printf("Temperature: %4.1f F\n\n", tempF);
+    Serial.printf("Relative humidity: %4.1f \n\n", humidity.relative_humidity);
+
+
+    memcpy(&mydata[0], &tempCSend, sizeof(int));
+    mydata[2] = (int) humidity.relative_humidity;
+    mydata[0] = tempCSend >> 8;
+    mydata[1] = tempCSend & 0xff;
     // Prepare upstream data transmission at the next possible time.
-    LMIC_setTxData2(1, mydata, sizeof(mydata) - 1, 0);
+    LMIC_setTxData2(1, mydata, sizeof(mydata), 0);
     Serial.println(F("Packet queued"));
   }
   // Next TX is scheduled after TX_COMPLETE event.
@@ -239,6 +267,16 @@ void do_send(osjob_t* j) {
 void setup() {
   Serial.begin(115200);
   Serial.println(F("Starting"));
+
+  //check for sensor
+  if (! aht.begin()) {
+    Serial.println("Could not find AHT? Check wiring");
+    while (1);
+  }
+  else
+  {
+    Serial.println("\n\n\nAHT10 or AHT20 found");
+  }
 
 #ifdef VCC_ENABLE
   // For Pinoccio Scout boards
