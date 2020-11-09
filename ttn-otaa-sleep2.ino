@@ -49,6 +49,10 @@ Adafruit_AHTX0 aht;
 float tempC, tempF;
 int tempCSend;
 
+RTC_DATA_ATTR lmic_t RTC_LMIC;
+
+bool GOTO_DEEPSLEEP = false;
+
 
 //
 // For normal use, we require that you edit the sketch to replace FILLMEIN
@@ -186,8 +190,10 @@ void onEvent (ev_t ev) {
         Serial.print(LMIC.dataLen);
         Serial.println(F(" bytes of payload"));
       }
+      GOTO_DEEPSLEEP = true;
       // Schedule next transmission
       os_setTimedCallback(&sendjob, os_getTime() + sec2osticks(TX_INTERVAL), do_send);
+      digitalWrite(LED_BUILTIN, LOW);
       break;
     case EV_LOST_TSYNC:
       Serial.println(F("EV_LOST_TSYNC"));
@@ -215,6 +221,7 @@ void onEvent (ev_t ev) {
     */
     case EV_TXSTART:
       Serial.println(F("EV_TXSTART"));
+      GOTO_DEEPSLEEP = false;
       break;
     case EV_TXCANCELED:
       Serial.println(F("EV_TXCANCELED"));
@@ -241,10 +248,10 @@ void do_send(osjob_t* j) {
   else
   {
     // read temp and humidity
-
+    digitalWrite(LED_BUILTIN, HIGH);
     sensors_event_t humidity, temperature;
-    aht.getEvent(&humidity, &temperature);// populate temp and humidity objects with fresh data
-    tempC = temperature.temperature;
+    //aht.getEvent(&humidity, &temperature);// populate temp and humidity objects with fresh data
+    tempC = 18.7;
     tempF = tempC * 9 / 5 + 32;
     tempCSend = (int)(tempC * 10);
 
@@ -264,14 +271,44 @@ void do_send(osjob_t* j) {
   // Next TX is scheduled after TX_COMPLETE event.
 }
 
+void SaveLMICToRTC()
+{
+  RTC_LMIC = LMIC;
+}
+
+void LoadLMICFromRTC()
+{
+  LMIC = RTC_LMIC;
+  /*
+    for (u1_t i = 0; i < 4; i++)
+    {
+      LMIC.channelMap[i] = 0xFFFF;
+    }
+    LMIC.channelMap[4] = 0x00FF;
+    LMIC.activeChannels125khz = 64;
+    LMIC.activeChannels500khz = 8;
+  */
+
+  /*  for (u1_t bi = 0; bi < MAX_BANDS; bi++)
+    {
+      LMIC.bands[bi].avail = 0;
+    }*/
+  Serial.printf("globalDutyAvail = %i\n", LMIC.globalDutyAvail);
+  LMIC.globalDutyAvail = 0;
+  Serial.printf("GlobalDutyRate = %i\n", LMIC.globalDutyRate);
+  //LMIC.globalDutyRate = 0;
+}
+
 void setup() {
   Serial.begin(115200);
-  Serial.println(F("Starting"));
+  Serial.println(F("\n\n\n\nStarting"));
+  pinMode(LED_BUILTIN, OUTPUT);
+  digitalWrite(LED_BUILTIN, LOW);
 
   //check for sensor
   if (! aht.begin()) {
     Serial.println("Could not find AHT? Check wiring");
-    while (1);
+    //while (1);
   }
   else
   {
@@ -289,11 +326,31 @@ void setup() {
   os_init();
   // Reset the MAC state. Session and pending data transfers will be discarded.
   LMIC_reset();
-  LMIC_setDrTxpow(DR_SF10, 30);
+  // Load the LoRa information from RTC
+  if (RTC_LMIC.seqnoUp != 0)
+  {
+    LoadLMICFromRTC();
+  }
+  else
+  {
+    LMIC_setDrTxpow(DR_SF10, 30);
+  }
   // Start job (sending automatically starts OTAA too)
   do_send(&sendjob);
 }
 
 void loop() {
   os_runloop_once();
+  //int seconds = 300;
+  if (!os_queryTimeCriticalJobs(ms2osticksRound( (TX_INTERVAL * 1000) )))
+  {
+    //Serial.println("Can sleep");
+    if (GOTO_DEEPSLEEP == true)
+    {
+      Serial.println("Going to sleep now");
+      SaveLMICToRTC();
+      esp_sleep_enable_timer_wakeup(TX_INTERVAL * 1000000);
+      esp_deep_sleep_start();
+    }
+  }
 }
